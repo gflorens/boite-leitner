@@ -893,7 +893,12 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden && vi
 })();
 </script>
 <script>
-if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+if ("serviceWorker" in navigator) {
+  const hadController = !!navigator.serviceWorker.controller;
+  // Une nouvelle version vient de s'installer : on recharge une fois pour l'afficher
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController && !window.__reloaded) { window.__reloaded = true; location.reload(); } });
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => r.update()).catch(() => {}));
+}
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 </script>
 </body>
