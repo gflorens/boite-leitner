@@ -188,6 +188,7 @@ details summary{cursor:pointer;font-weight:700}
 .testbar .when b{font-family:var(--f-display);font-size:1.05rem}
 .testbar .btn{background:var(--paper);color:var(--ink);padding:7px 12px}
 .testpanel p{margin:4px 0 12px}
+.libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
 @media (prefers-reduced-motion:reduce){.card,.stack i,.progress i{transition:none}}
 </style>
 </head>
@@ -479,7 +480,7 @@ function renderHome() {
 
   <section class="panel" aria-labelledby="dk">
     <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap"><h2 id="dk">Les séries</h2>
-    <button class="btn" id="newDeck">Nouvelle série</button></div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn primary" id="libBtn">Bibliothèque de séries</button><button class="btn" id="newDeck">Créer une série</button></div></div>
     <div class="decks">${decks}</div>
   </section>
 
@@ -509,6 +510,7 @@ function renderHome() {
   $("#skip") && ($("#skip").onclick = () => { s.bx.s++; s.bx.day = t; save(); render(); });
   $("#practice").onclick = () => startSession(true);
   $("#newDeck").onclick = () => { view = { name: "edit", id: null }; render(); };
+  $("#libBtn").onclick = () => { view = { name: "library" }; render(); };
   app.querySelectorAll("[data-pick]").forEach((b) => (b.onclick = () => { p.activeDeck = b.dataset.pick; save(); render(); }));
   app.querySelectorAll("[data-edit]").forEach((b) => (b.onclick = () => { view = { name: "edit", id: b.dataset.edit }; render(); }));
   app.querySelectorAll("[data-wd]").forEach((b) => (b.onclick = () => {
@@ -705,6 +707,76 @@ function renderTestbar() {
   $("#tNext").onclick = () => jump(true); $("#tDay").onclick = () => jump(false); $("#tOff").onclick = exitTest;
 }
 
+/* ---------- Bibliothèque de séries toutes prêtes (cycle 3) ---------- */
+const LIBRARY = [
+  { key: "mult", name: "Tables de multiplication (2 à 9)", theme: "Calcul", about: "Les 36 produits des tables de 2 à 9, avec indice quand un produit a deux décompositions.",
+    build: () => multiplicationDeck() },
+  { key: "c100", name: "Compléments à 100", theme: "Calcul", labels: { f: "le nombre", b: "son complément à 100" }, newPerDay: 5,
+    about: "De 5 en 5 : 35 → 65.", lines: Array.from({ length: 19 }, (_, i) => `${(i + 1) * 5} ; ${100 - (i + 1) * 5}`) },
+  { key: "conj", name: "Être, avoir, aller, faire au présent", theme: "Conjugaison", labels: { f: "le verbe et la personne", b: "la forme conjuguée" }, newPerDay: 6,
+    about: "Les 24 formes des quatre verbes les plus fréquents.",
+    lines: [["être", ["je suis", "tu es", "il, elle, on est", "nous sommes", "vous êtes", "ils, elles sont"]],
+      ["avoir", ["j'ai", "tu as", "il, elle, on a", "nous avons", "vous avez", "ils, elles ont"]],
+      ["aller", ["je vais", "tu vas", "il, elle, on va", "nous allons", "vous allez", "ils, elles vont"]],
+      ["faire", ["je fais", "tu fais", "il, elle, on fait", "nous faisons", "vous faites", "ils, elles font"]]]
+      .flatMap(([v, f]) => ["je", "tu", "il, elle, on", "nous", "vous", "ils, elles"].map((p, i) => `${v} · ${p} ; ${f[i]}`)) },
+  { key: "regions", name: "Régions de France et chefs-lieux", theme: "Géographie", labels: { f: "la région", b: "son chef-lieu" }, newPerDay: 4,
+    about: "Les 13 régions métropolitaines et les 5 régions d'outre-mer.",
+    lines: ["Auvergne-Rhône-Alpes ; Lyon", "Bourgogne-Franche-Comté ; Dijon", "Bretagne ; Rennes", "Centre-Val de Loire ; Orléans", "Corse ; Ajaccio",
+      "Grand Est ; Strasbourg", "Hauts-de-France ; Lille", "Île-de-France ; Paris", "Normandie ; Rouen", "Nouvelle-Aquitaine ; Bordeaux", "Occitanie ; Toulouse",
+      "Pays de la Loire ; Nantes", "Provence-Alpes-Côte d'Azur ; Marseille", "Guadeloupe ; Basse-Terre", "Martinique ; Fort-de-France", "Guyane ; Cayenne",
+      "La Réunion ; Saint-Denis", "Mayotte ; Mamoudzou"] },
+  { key: "ue", name: "Capitales de l'Union européenne", theme: "Géographie", labels: { f: "le pays", b: "sa capitale" }, newPerDay: 4,
+    about: "Les 27 pays de l'Union européenne.",
+    lines: ["Allemagne ; Berlin", "Autriche ; Vienne", "Belgique ; Bruxelles", "Bulgarie ; Sofia", "Chypre ; Nicosie", "Croatie ; Zagreb", "Danemark ; Copenhague",
+      "Espagne ; Madrid", "Estonie ; Tallinn", "Finlande ; Helsinki", "France ; Paris", "Grèce ; Athènes", "Hongrie ; Budapest", "Irlande ; Dublin", "Italie ; Rome",
+      "Lettonie ; Riga", "Lituanie ; Vilnius", "Luxembourg ; Luxembourg", "Malte ; La Valette", "Pays-Bas ; Amsterdam", "Pologne ; Varsovie", "Portugal ; Lisbonne",
+      "Roumanie ; Bucarest", "Slovaquie ; Bratislava", "Slovénie ; Ljubljana", "Suède ; Stockholm", "Tchéquie ; Prague"] },
+  { key: "relief", name: "Fleuves et montagnes de France", theme: "Géographie", labels: { f: "la question", b: "la réponse" }, newPerDay: 3,
+    about: "Où se jettent les cinq grands fleuves, et les principaux massifs.",
+    lines: ["La Seine se jette dans… ; la Manche", "La Loire se jette dans… ; l'océan Atlantique", "La Garonne se jette dans… ; l'océan Atlantique | (par l'estuaire de la Gironde)",
+      "Le Rhône se jette dans… ; la mer Méditerranée", "Le Rhin se jette dans… ; la mer du Nord", "Le plus long fleuve de France ; la Loire",
+      "Le plus haut sommet de France ; le mont Blanc | (Alpes)", "Massif à la frontière avec l'Espagne ; les Pyrénées", "Massif où se trouve le puy de Dôme ; le Massif central",
+      "Massif entre la Lorraine et l'Alsace ; les Vosges", "Massif à la frontière avec la Suisse, au nord des Alpes ; le Jura"] },
+  { key: "dates", name: "Grandes dates de l'histoire de France", theme: "Histoire", labels: { f: "l'événement", b: "la date" }, newPerDay: 3,
+    about: "Les repères chronologiques du cycle 3.",
+    lines: ["Bataille d'Alésia ; 52 av. J.-C.", "Baptême de Clovis ; vers 496", "Charlemagne couronné empereur ; 800", "Hugues Capet devient roi ; 987",
+      "Arrivée de Christophe Colomb en Amérique ; 1492", "Bataille de Marignan ; 1515", "Édit de Nantes ; 1598", "Prise de la Bastille ; 1789",
+      "Napoléon Ier sacré empereur ; 1804", "Abolition définitive de l'esclavage en France ; 1848", "Lois de Jules Ferry sur l'école ; 1881-1882",
+      "Première Guerre mondiale ; 1914-1918", "Seconde Guerre mondiale ; 1939-1945", "Droit de vote des femmes en France ; 1944",
+      "Début de la Ve République ; 1958", "Premiers pas de l'homme sur la Lune ; 1969"] },
+  { key: "en-time", name: "Jours et mois en anglais", theme: "Anglais", labels: { f: "le mot français", b: "le mot anglais" }, newPerDay: 4,
+    about: "Les 7 jours et les 12 mois.",
+    lines: ["lundi ; Monday", "mardi ; Tuesday", "mercredi ; Wednesday", "jeudi ; Thursday", "vendredi ; Friday", "samedi ; Saturday", "dimanche ; Sunday",
+      "janvier ; January", "février ; February", "mars ; March", "avril ; April", "mai ; May", "juin ; June", "juillet ; July", "août ; August",
+      "septembre ; September", "octobre ; October", "novembre ; November", "décembre ; December"] },
+];
+function libDeck(item) {
+  if (item.build) { const d = item.build(); d.lib = item.key; return d; }
+  const d = newDeck(item.name, parseLines(item.lines.join("\n")).cards, { newPerDay: item.newPerDay }, { ...item.labels });
+  d.lib = item.key; return d;
+}
+const hasLib = (key) => state.decks.some((d) => d.lib === key || (key === "mult" && /^Tables de multiplication/.test(d.name)));
+function renderLibrary() {
+  const p = prof();
+  const groups = [...new Set(LIBRARY.map((x) => x.theme))];
+  app.innerHTML = header() + `<section class="panel">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <h2>Bibliothèque de séries</h2><button class="btn ghost" id="cancel">← Retour</button></div>
+    <p class="help" style="margin:6px 0 0">Ajoutez une série en un clic. Elle devient une série comme les autres : vous pouvez ensuite la modifier, retirer ou ajouter des cartes.</p>
+    ${groups.map((g) => `<h3 class="libh">${esc(g)}</h3><div class="decks">${LIBRARY.filter((x) => x.theme === g).map((x) => {
+      const n = x.build ? 36 : x.lines.length, has = hasLib(x.key);
+      return `<div class="deckrow"><div class="name">${esc(x.name)}<small>${plural(n, "carte")} · ${esc(x.about)}</small></div>
+        ${has ? `<span class="help">Déjà ajoutée</span>` : `<button class="btn" data-lib="${x.key}">Ajouter</button>`}</div>`; }).join("")}</div>`).join("")}
+  </section>`;
+  bindHeader();
+  $("#cancel").onclick = () => { view = { name: "home" }; render(); };
+  app.querySelectorAll("[data-lib]").forEach((b) => (b.onclick = () => {
+    const item = LIBRARY.find((x) => x.key === b.dataset.lib), d = libDeck(item);
+    state.decks.push(d); p.activeDeck = d.id; save(); toast(`« ${item.name} » ajoutée`); render();
+  }));
+}
+
 /* ---------- Édition d'une série ---------- */
 const cardToLine = (c) => `${c.front}${c.hint ? " [" + c.hint + "]" : ""} ; ${c.back.replace(/\n/g, " | ")}`;
 function parseLines(text) {
@@ -807,6 +879,7 @@ function render() {
   if (view.name === "who") renderWho();
   else if (view.name === "session") renderSession();
   else if (view.name === "edit") renderEdit();
+  else if (view.name === "library") renderLibrary();
   else renderHome();
   if (view.name !== "session") window.scrollTo(0, 0);
 }

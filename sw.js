@@ -1,5 +1,5 @@
 // Fonctionnement hors connexion : la page s'ouvre depuis le cache, puis se met à jour en arrière-plan.
-const CACHE = "leitner-v1";
+const CACHE = "leitner-v2";
 const CORE = ["./", "index.html", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png"];
 self.addEventListener("install", (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE))); self.skipWaiting(); });
 self.addEventListener("activate", (e) => {
