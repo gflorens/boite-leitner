@@ -711,6 +711,13 @@ function renderTestbar() {
 const LIBRARY = [
   { key: "mult", name: "Tables de multiplication (2 à 9)", theme: "Calcul", about: "Les 36 produits des tables de 2 à 9, avec indice quand un produit a deux décompositions.",
     build: () => multiplicationDeck() },
+  { key: "div", name: "Divisions des tables (2 à 9)", theme: "Calcul", labels: { f: "la division", b: "le quotient" }, newPerDay: 5,
+    about: "Les 64 divisions exactes tirées des tables de 2 à 9 : 56 : 7 → 8.",
+    lines: (() => { const out = []; for (let a = 2; a <= 9; a++) for (let b = 2; b <= 9; b++) out.push([a * b, a, b]);
+      return out.sort((x, y) => x[0] - y[0] || x[1] - y[1]).map(([p, a, b]) => `${p} : ${a} ; ${b}`); })() },
+  { key: "doubles", name: "Doubles de 1 à 49", theme: "Calcul", labels: { f: "le nombre", b: "son double" }, newPerDay: 5,
+    about: "23 → 46. Dans l'autre sens, on travaille les moitiés : 46 → 23.",
+    lines: Array.from({ length: 49 }, (_, i) => `${i + 1} ; ${2 * (i + 1)}`) },
   { key: "c100", name: "Compléments à 100", theme: "Calcul", labels: { f: "le nombre", b: "son complément à 100" }, newPerDay: 5,
     about: "De 5 en 5 : 35 → 65.", lines: Array.from({ length: 19 }, (_, i) => `${(i + 1) * 5} ; ${100 - (i + 1) * 5}`) },
   { key: "conj", name: "Être, avoir, aller, faire au présent", theme: "Conjugaison", labels: { f: "le verbe et la personne", b: "la forme conjuguée" }, newPerDay: 6,
