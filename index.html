@@ -189,6 +189,12 @@ details summary{cursor:pointer;font-weight:700}
 .testbar .btn{background:var(--paper);color:var(--ink);padding:7px 12px}
 .testpanel p{margin:4px 0 12px}
 .libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
+.mic{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:999px;background:var(--soft);font-weight:700;font-size:1.1rem;min-width:min(260px,100%)}
+.micdot{width:14px;height:14px;border-radius:50%;background:var(--ko);animation:pulse 1.2s ease-in-out infinite;flex:none}
+@keyframes pulse{50%{opacity:.35;transform:scale(.75)}}
+.verdict{font-family:var(--f-display);font-weight:800;font-size:1.4rem;width:100%;text-align:center}
+.verdict.ok{color:var(--ok)}.verdict.ko{color:var(--ko);font-size:1.1rem}
+@media (prefers-reduced-motion:reduce){.micdot{animation:none}}
 @media (prefers-reduced-motion:reduce){.card,.stack i,.progress i{transition:none}}
 </style>
 </head>
@@ -452,6 +458,10 @@ function renderHome() {
         ${["f", "r"].map((x) => `<button type="button" data-dir="${x}" aria-pressed="${x === dir}" title="${esc(dirLabel(d, x))}">${esc(dirShort(d, x))}</button>`).join("")}
       </div>
       <p class="help" style="margin:6px 0 0">${esc(dirLabel(d, dir))}. Chaque sens a sa propre boîte et ses propres séances.</p>
+      ${micAvailable() ? `<div class="seg" role="group" aria-label="Façon de répondre">
+        <button type="button" data-mode="flip" aria-pressed="${p.answerMode !== "mic"}">Retourner la carte</button>
+        <button type="button" data-mode="mic" aria-pressed="${p.answerMode === "mic"}">Répondre au micro</button></div>
+        ${p.answerMode === "mic" ? `<p class="help" style="margin:6px 0 0">La voix est transcrite par le service du navigateur (Google pour Chrome, Microsoft pour Edge, Apple pour Safari) : connexion Internet nécessaire.</p>` : ""}` : ""}
       <p class="status">${status}</p>
       ${s.available ? `<div class="counts">
         <div class="count"><b class="num">${s.toReview}</b><span>à revoir</span></div>
@@ -506,6 +516,7 @@ function renderHome() {
   $("#bkSave") && ($("#bkSave").onclick = backupSave);
   $("#bkFile") && ($("#bkFile").onchange = backupLoad);
   app.querySelectorAll("[data-dir]").forEach((b) => (b.onclick = () => { p.dirs[d.id] = b.dataset.dir; save(); render(); }));
+  app.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { p.answerMode = b.dataset.mode; save(); render(); }));
   $("#start") && ($("#start").onclick = () => startSession(false));
   $("#skip") && ($("#skip").onclick = () => { s.bx.s++; s.bx.day = t; save(); render(); });
   $("#practice").onclick = () => startSession(true);
@@ -531,6 +542,8 @@ function startSession(practice) {
   } else {
     sess = { practice: false, dir, n: s.next, stages: s.todayBoxes.slice(), stage: -1, q: [], i: 0, newLeft: s.newCount };
   }
+  sess.mic = micAvailable() && p.answerMode === "mic";
+  if (sess.mic && !navigator.onLine) { sess.mic = false; toast("Pas de connexion : le micro ne marche pas, on retourne les cartes"); }
   Object.assign(sess, { flipped: false, firstTry: 0, firstOk: 0, retries: new Set(), moves: [], answered: 0 });
   if (!practice) nextStage();
   view = { name: "session" }; render();
@@ -594,7 +607,7 @@ function renderSession() {
     <div class="answer" id="answer">${sess.flipped
       ? `<button class="btn ko big" id="ko">Je ne savais pas</button><button class="btn ok big" id="ok">Je savais</button>`
       : `<button class="btn primary big" id="flip">Retourner la carte</button>`}</div>
-    <div class="keys">${esc(dirLabel(d, sess.dir))} · Espace : retourner · ← : je ne savais pas · → : je savais</div>
+    <div class="keys">${esc(dirLabel(d, sess.dir))}${sess.mic ? " · Réponds à voix haute" : " · Espace : retourner · ← : je ne savais pas · → : je savais"}</div>
     ${testMode ? `<div class="answer"><span class="help">Mode test :</span><button class="btn" data-auto="1">Finir : tout juste</button><button class="btn" data-auto="0.8">Finir : 80 % justes</button><button class="btn" data-auto="0">Finir : tout faux</button></div>` : ""}
   </div>`;
   app.querySelectorAll("[data-auto]").forEach((b) => (b.onclick = () => autoFinish(+b.dataset.auto)));
@@ -602,11 +615,13 @@ function renderSession() {
   $("#flip") && ($("#flip").onclick = flip);
   $("#ok") && ($("#ok").onclick = () => answer(true));
   $("#ko") && ($("#ko").onclick = () => answer(false));
-  $("#quit").onclick = () => { sess = null; view = { name: "home" }; render(); };
-  ($("#ok") || $("#flip")).focus({ preventScroll: true });
+  $("#quit").onclick = () => { stopListening(); sess = null; view = { name: "home" }; render(); };
+  if (sess.mic && !sess.flipped) { $("#scene").onclick = null; micTurn(); }
+  else ($("#ok") || $("#flip")).focus({ preventScroll: true });
 }
 function flip() {
   if (sess.flipped) return;
+  stopListening();
   sess.flipped = true; $("#card").classList.add("flipped");
   $("#answer").innerHTML = `<button class="btn ko big" id="ko">Je ne savais pas</button><button class="btn ok big" id="ok">Je savais</button>`;
   $("#ok").onclick = () => answer(true); $("#ko").onclick = () => answer(false); $("#ok").focus({ preventScroll: true });
@@ -621,7 +636,7 @@ function record(ok) {
   if (!ok && (sess.practice || item.box === 1)) sess.q.splice(Math.min(sess.q.length, sess.i + 4), 0, { id: item.id, box: item.box, retry: true });
   sess.i++;
 }
-function answer(ok) { record(ok); if (!sess.practice) save(); sess.flipped = false; renderSession(); }
+function answer(ok) { stopListening(); record(ok); if (!sess.practice) save(); sess.flipped = false; renderSession(); }
 function autoFinish(rate) {
   for (let g = 0; g < 2000; g++) {
     if (sess.i >= sess.q.length) { if (sess.practice || !nextStage()) break; continue; }
@@ -654,6 +669,107 @@ document.addEventListener("keydown", (e) => {
   else if (sess.flipped && e.key === "ArrowRight") { e.preventDefault(); answer(true); }
   else if (sess.flipped && e.key === "ArrowLeft") { e.preventDefault(); answer(false); }
 });
+
+/* ---------- Réponse au micro (version installée) ---------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+const micAvailable = () => STANDALONE && !!SR;
+const LANGS = [["fr-FR", "français"], ["en-GB", "anglais"], ["es-ES", "espagnol"], ["de-DE", "allemand"], ["it-IT", "italien"]];
+const NUMW = { zero: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, treize: 13,
+  quatorze: 14, quinze: 15, seize: 16, vingt: 20, vingts: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60 };
+const norm = (s) => s.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[’']/g, " ")
+  .replace(/[×*]/g, " x ").replace(/\bfois\b/g, " x ").replace(/[^a-z0-9 ]+/g, " ").replace(/\s+/g, " ").trim();
+// « quatre vingt dix sept » → « 97 »
+function wordsToDigits(s) {
+  const out = []; let total = 0, cur = 0, inNum = false, last = null;
+  const flush = () => { if (inNum) { out.push(String(total + cur)); total = 0; cur = 0; inNum = false; last = null; } };
+  for (const w of s.split(" ")) {
+    if (w === "et" && inNum) continue;
+    if (w in NUMW) { const v = NUMW[w]; cur += v === 20 && last === 4 ? 76 : v; inNum = true; last = v; }
+    else if (w === "cent" || w === "cents") { cur = (cur || 1) * 100; inNum = true; last = 100; }
+    else if (w === "mille") { total += (cur || 1) * 1000; cur = 0; inNum = true; last = 1000; }
+    else { flush(); out.push(w); }
+  }
+  flush(); return out.join(" ").trim();
+}
+const coreOf = (s) => wordsToDigits(norm(s));
+// Réponses acceptées : chaque ligne du verso, sans parenthèses, pronoms dépliés (« il, elle, on est » → « il est »…)
+function answerVariants(text) {
+  const out = [];
+  text.split("\n").forEach((l) => {
+    l = l.replace(/\(.*?\)/g, "").trim(); if (!l) return;
+    const m = l.match(/^(il, elle, on|ils, elles)\s+(.*)$/);
+    if (m) m[1].split(", ").forEach((pr) => out.push(pr + " " + m[2])); else out.push(l);
+  });
+  return out;
+}
+const NUM_FILLER = /\b(x|vers|av|avant|apres|j|c|jesus|christ|egal|egale|ca|fait|font|divise|par)\b/g;
+const dropArticle = (x) => x.replace(/^(le|la|les|l|the|el|der|die|das|il|lo) (?=\S)/, "").trim();
+function heardMatches(heard, expected) {
+  const h = coreOf(heard), hn = h.match(/\d+/g) || [];
+  return answerVariants(expected).some((v) => {
+    const e = coreOf(v), en = e.match(/\d+/g) || [];
+    const letters = e.replace(/\d+/g, " ").replace(NUM_FILLER, " ").trim();
+    if (en.length && !letters) return hn.length >= en.length && hn.slice(-en.length).join(" ") === en.join(" ");
+    const es = dropArticle(e);
+    return (" " + h + " ").includes(" " + es + " ") || (" " + h + " ").includes(" " + e + " ");
+  });
+}
+let rec = null, recToken = 0;
+function stopListening() { recToken++; if (rec) { try { rec.abort(); } catch {} rec = null; } }
+function listen(lang, expected, onDone) {
+  stopListening();
+  const token = recToken;
+  const r = new SR(); rec = r;
+  r.lang = lang; r.interimResults = true; r.maxAlternatives = 5; r.continuous = false;
+  let finalAlts = null, lastInterim = "";
+  r.onresult = (e) => {
+    if (token !== recToken) return;
+    const res = e.results[e.results.length - 1];
+    const alts = Array.from(res).map((a) => a.transcript);
+    if (res.isFinal) finalAlts = alts;
+    else { lastInterim = alts[0]; const el = $("#heard"); if (el) el.textContent = "« " + lastInterim + " »"; }
+    if (alts.some((a) => heardMatches(a, expected))) { finalAlts = alts; try { r.stop(); } catch {} }
+  };
+  r.onerror = (e) => { if (token !== recToken) return; finalAlts = null; onDone({ error: e.error }); recToken++; };
+  r.onend = () => {
+    if (token !== recToken) return;
+    rec = null;
+    if (!finalAlts && lastInterim) finalAlts = [lastInterim];
+    if (!finalAlts) return onDone({ error: "no-speech" });
+    onDone({ ok: finalAlts.some((a) => heardMatches(a, expected)), heard: finalAlts[0] });
+  };
+  try { r.start(); } catch { onDone({ error: "start" }); }
+}
+function micTurn() {
+  const p = prof(), d = deckOf(p), item = sess.q[sess.i], card = d.cards.find((c) => c.id === item.id);
+  const fwd = sess.dir === "f", expected = fwd ? card.back : card.front;
+  const langs = d.langs || {}, lang = (fwd ? langs.b : langs.f) || "fr-FR";
+  const box = $("#answer");
+  box.innerHTML = `<div class="mic" aria-live="polite"><span class="micdot" aria-hidden="true"></span><span id="heard">J'écoute…</span></div>
+    <button class="btn" id="dunno">Je ne sais pas</button>`;
+  $("#dunno").onclick = () => { stopListening(); flip(); };
+  listen(lang, expected, (r) => {
+    if (view.name !== "session" || !sess || sess.flipped || !$("#answer")) return;
+    if (r.error) {
+      if (r.error === "not-allowed" || r.error === "service-not-allowed" || r.error === "network" || r.error === "start") {
+        toast(r.error === "network" ? "Le micro a besoin d'une connexion Internet" : "Le micro n'est pas autorisé : réponse en retournant la carte");
+        sess.mic = false; renderSession(); return;
+      }
+      box.innerHTML = `<span class="help">Je n'ai rien entendu.</span><button class="btn primary" id="again">Réécouter</button><button class="btn" id="dunno">Je ne sais pas</button>`;
+      $("#again").onclick = micTurn; $("#dunno").onclick = flip; $("#again").focus({ preventScroll: true });
+      return;
+    }
+    sess.flipped = true; $("#card").classList.add("flipped");
+    if (r.ok) {
+      box.innerHTML = `<div class="verdict ok">Juste !</div>`;
+      const i = sess.i; setTimeout(() => { if (sess && sess.i === i && view.name === "session") answer(true); }, 1000);
+    } else {
+      box.innerHTML = `<div class="verdict ko">J'ai entendu « ${esc(r.heard)} »</div>
+        <button class="btn ko big" id="ko">Continuer</button><button class="btn" id="ok">En fait, c'était juste</button>`;
+      $("#ko").onclick = () => answer(false); $("#ok").onclick = () => answer(true); $("#ko").focus({ preventScroll: true });
+    }
+  });
+}
 
 /* ---------- Sauvegarde dans un fichier (version installée) ---------- */
 function backupSave() {
@@ -752,7 +868,7 @@ const LIBRARY = [
       "Napoléon Ier sacré empereur ; 1804", "Abolition définitive de l'esclavage en France ; 1848", "Lois de Jules Ferry sur l'école ; 1881-1882",
       "Première Guerre mondiale ; 1914-1918", "Seconde Guerre mondiale ; 1939-1945", "Droit de vote des femmes en France ; 1944",
       "Début de la Ve République ; 1958", "Premiers pas de l'homme sur la Lune ; 1969"] },
-  { key: "en-time", name: "Jours et mois en anglais", theme: "Anglais", labels: { f: "le mot français", b: "le mot anglais" }, newPerDay: 4,
+  { key: "en-time", name: "Jours et mois en anglais", theme: "Anglais", labels: { f: "le mot français", b: "le mot anglais" }, newPerDay: 4, langs: { f: "fr-FR", b: "en-GB" },
     about: "Les 7 jours et les 12 mois.",
     lines: ["lundi ; Monday", "mardi ; Tuesday", "mercredi ; Wednesday", "jeudi ; Thursday", "vendredi ; Friday", "samedi ; Saturday", "dimanche ; Sunday",
       "janvier ; January", "février ; February", "mars ; March", "avril ; April", "mai ; May", "juin ; June", "juillet ; July", "août ; August",
@@ -761,6 +877,7 @@ const LIBRARY = [
 function libDeck(item) {
   if (item.build) { const d = item.build(); d.lib = item.key; return d; }
   const d = newDeck(item.name, parseLines(item.lines.join("\n")).cards, { newPerDay: item.newPerDay }, { ...item.labels });
+  if (item.langs) d.langs = { ...item.langs };
   d.lib = item.key; return d;
 }
 const hasLib = (key) => state.decks.some((d) => d.lib === key || (key === "mult" && /^Tables de multiplication/.test(d.name)));
@@ -816,6 +933,10 @@ function renderEdit() {
         <div class="field"><label class="label" for="lf">Le recto montre…</label><input id="lf" value="${esc(labels.f)}" placeholder="le pays"></div>
         <div class="field"><label class="label" for="lb">Le verso montre…</label><input id="lb" value="${esc(labels.b)}" placeholder="la capitale"></div>
       </div>
+      ${STANDALONE ? `<div class="row">
+        <div class="field"><label class="label" for="lgf">Langue du recto (micro)</label><select id="lgf">${LANGS.map(([v, n]) => `<option value="${v}" ${((d && d.langs) || {}).f === v ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+        <div class="field"><label class="label" for="lgb">Langue du verso (micro)</label><select id="lgb">${LANGS.map(([v, n]) => `<option value="${v}" ${((d && d.langs) || {}).b === v ? "selected" : ""}>${n}</option>`).join("")}</select></div>
+      </div>` : ""}
       <span class="help" style="margin-top:-6px">Ces noms servent au choix du sens : « Je vois ${esc(labels.f)}, je trouve ${esc(labels.b)} ».</span>
       <div class="row">
         <div class="field"><label class="label" for="npd">Nouvelles cartes par séance</label><input type="number" id="npd" min="0" max="200" value="${set.newPerDay}"></div>
@@ -867,10 +988,11 @@ function renderEdit() {
     const intervals = [...app.querySelectorAll("#ints input")].map((x) => Math.max(1, Math.min(365, Math.round(+x.value || 1))));
     const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value };
     const lab = { f: $("#lf").value.trim() || "le recto", b: $("#lb").value.trim() || "le verso" };
+    const langs = $("#lgf") ? { f: $("#lgf").value, b: $("#lgb").value } : null;
     const name = $("#name").value.trim() || "Série sans nom";
-    if (isNew) { const nd = newDeck(name, uniq, settings, lab); state.decks.push(nd); p.activeDeck = nd.id; toast("Série créée"); }
+    if (isNew) { const nd = newDeck(name, uniq, settings, lab); if (langs) nd.langs = langs; state.decks.push(nd); p.activeDeck = nd.id; toast("Série créée"); }
     else {
-      d.name = name; d.cards = uniq; d.settings = settings; d.labels = lab;
+      d.name = name; d.cards = uniq; d.settings = settings; d.labels = lab; if (langs) d.langs = langs;
       const ids = new Set(uniq.map((c) => c.id));
       state.profiles.forEach((q) => { const x = q.prog[d.id]; if (!x) return; ["f", "r"].forEach((k) => {
         const c = (x[k] || emptyBox()).c; Object.keys(c).forEach((id) => { if (!ids.has(id)) delete c[id]; else c[id] = Math.min(c[id], intervals.length); }); }); });
