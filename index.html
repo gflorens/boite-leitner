@@ -234,6 +234,9 @@ const toast = (msg) => { const t = $("#toast"); t.textContent = msg; t.classList
 const DEFAULT_INTERVALS = { 3: [1, 2, 4], 4: [1, 2, 4, 8], 5: [1, 2, 4, 8, 16], 6: [1, 2, 4, 8, 16, 32], 7: [1, 2, 4, 8, 16, 32, 64] };
 const BOXC = (i) => `var(--b${Math.min(i, 7)})`;
 const freqLabel = (v) => (v === 1 ? "à chaque séance" : `toutes les ${v} séances`);
+// Plafond de cartes en case 1 (0 = pas de limite ; 5 par défaut, y compris pour les séries déjà créées)
+const box1Cap = (d) => (d.settings.maxBox1 ?? 5);
+const newAllowed = (d, inBox1, wanted) => { const c = box1Cap(d); return c ? Math.min(wanted, Math.max(0, c - inBox1)) : wanted; };
 // Cases au programme de la séance n, de la plus haute à la plus basse.
 const boxesFor = (n, intervals) => intervals.map((v, i) => (n % v === 0 ? i + 1 : 0)).filter(Boolean).reverse();
 
@@ -252,7 +255,7 @@ function multiplicationDeck() {
 }
 function newDeck(name, cards, s = {}, labels) {
   return { id: uid("d"), name, cards, labels: labels || { f: "le recto", b: "le verso" },
-    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random" } };
+    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random", maxBox1: s.maxBox1 ?? 5 } };
 }
 const noArt = (s) => s.replace(/^(les\s+|le\s+|la\s+|l['’]\s*)/i, "");
 const dirLabel = (d, dir) => dir === "f" ? `Je vois ${d.labels.f}, je trouve ${d.labels.b}` : `Je vois ${d.labels.b}, je trouve ${d.labels.f}`;
@@ -260,7 +263,7 @@ const dirShort = (d, dir) => dir === "f" ? `${cap(noArt(d.labels.f))} → ${noAr
 
 /* ---------- État ---------- */
 const LS_KEY = "leitner-state-v1";
-let state = null, docRef = null, syncLabel = "Enregistré sur cet appareil";
+let state = null, syncLabel = "Enregistré sur cet appareil";
 function lsRead() { try { const s = localStorage.getItem(LS_KEY); return s ? JSON.parse(s) : null; } catch { return null; } }
 function lsWrite(s) { try { localStorage.setItem(LS_KEY, JSON.stringify(s)); } catch {} }
 function freshState() { return { v: 3, updatedAt: 0, workDays: [1, 2, 4, 5], decks: [multiplicationDeck()], profiles: [], activeProfile: null }; }
@@ -295,15 +298,71 @@ function migrate(s) {
   s.v = 3; return s;
 }
 
-let saveTimer = null;
+/* ---------- Synchronisation avec le compte ----------
+   Un document par élève (…/leitner/eleves/<élève>) et un document commun (séries, jours de séance).
+   Chaque fenêtre n'écrit que ce qui a changé, et reçoit en direct ce que les autres fenêtres
+   enregistrent : une fenêtre restée ouverte ne peut plus effacer le travail fait ailleurs. */
+let mainRef = null, elevesRef = null, synced = { main: null, prof: {} }, writeChain = {}, saveTimer = null;
+const stripT = (o) => { const c = { ...o }; delete c.t; return JSON.stringify(c); };
+const mainOf = (s) => ({ v: 3, workDays: s.workDays, decks: s.decks, gone: s.gone || {} });
+const clone = (o) => JSON.parse(JSON.stringify(o));
+const syncFailed = () => { syncLabel = "Synchronisation impossible, gardé sur cet appareil"; renderSync(); };
+function queueWrite(key, fn) { writeChain[key] = (writeChain[key] || Promise.resolve()).then(fn).catch(syncFailed); }
 function save() {
   if (testMode) return; // mode test : tout reste en mémoire
   state.updatedAt = Date.now();
   lsWrite(state);
-  if (docRef) {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => { docRef.set(JSON.parse(JSON.stringify(state))).catch(() => { syncLabel = "Synchronisation impossible, gardé sur cet appareil"; renderSync(); }); }, 600);
+  if (!mainRef) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(pushChanges, 400);
+}
+function pushChanges() {
+  if (!mainRef || testMode) return;
+  const now = Date.now();
+  for (const p of state.profiles) {
+    const js = stripT(p);
+    if (synced.prof[p.id] === js) continue;
+    p.t = now; synced.prof[p.id] = js;
+    const body = clone(p);
+    queueWrite("p" + p.id, () => elevesRef.doc(p.id).set(body));
   }
+  for (const id of Object.keys(synced.prof)) if (!state.profiles.some((p) => p.id === id)) {
+    delete synced.prof[id]; (state.gone ||= {})[id] = now;
+    queueWrite("p" + id, () => elevesRef.doc(id).delete());
+  }
+  const mjs = JSON.stringify(mainOf(state));
+  if (synced.main !== mjs) { synced.main = mjs; const body = JSON.parse(mjs); queueWrite("main", () => mainRef.set(body)); }
+  lsWrite(state);
+}
+const busyId = () => (view.name === "session" && sess ? state.activeProfile : null);
+function refreshView() { renderSync(); if (view.name === "who" || view.name === "home") render(); }
+// Lit le compte et fusionne : pour chaque élève, la version la plus récente l'emporte.
+async function pullAll() {
+  const [ms, es] = await Promise.all([mainRef.get(), elevesRef.get()]);
+  const mainData = ms.exists ? clone(ms.data()) : null;
+  let remote = es.docs.map((d) => clone(d.data()));
+  let migrating = false;
+  if (!remote.length && mainData && Array.isArray(mainData.profiles) && mainData.profiles.length) { remote = migrate(clone(mainData)).profiles; migrating = true; }
+  const s = state;
+  if (mainData && mainData.decks) { const m = migrate({ ...mainData, profiles: [] }); s.decks = m.decks; s.workDays = m.workDays; s.gone = mainData.gone || {}; }
+  const ids = new Set(remote.map((p) => p.id)), merged = [];
+  for (const r of remote) { const l = s.profiles.find((p) => p.id === r.id); merged.push(l && (l.t || 0) > (r.t || 0) ? l : r); }
+  const accountEmpty = !mainData && !remote.length;
+  for (const l of s.profiles) if (!ids.has(l.id) && (accountEmpty || ((l.t || 0) > 0 && !(s.gone || {})[l.id]))) merged.push(l);
+  s.profiles = merged;
+  if (!s.profiles.some((p) => p.id === s.activeProfile)) s.activeProfile = null;
+  synced.main = mainData && mainData.decks && !mainData.profiles ? JSON.stringify({ v: 3, workDays: mainData.workDays, decks: mainData.decks, gone: mainData.gone || {} }) : null;
+  synced.prof = {};
+  if (!migrating) remote.forEach((r) => (synced.prof[r.id] = stripT(r)));
+  lsWrite(s);
+}
+function applyRemoteProfile(r) {
+  const js = stripT(r); synced.prof[r.id] = js;
+  const i = state.profiles.findIndex((p) => p.id === r.id);
+  if (r.id === busyId()) return false;
+  if (i >= 0) { if (stripT(state.profiles[i]) === js) return false; state.profiles[i] = r; return true; }
+  if ((state.gone || {})[r.id]) return false;
+  state.profiles.push(r); return true;
 }
 async function connectAccount() {
   try {
@@ -312,20 +371,33 @@ async function connectAccount() {
     const [db, u] = await Promise.all([window.claude.use("db"), window.claude.use("user")]);
     if (!db || !u) return;
     const id = await u.id(); if (!id) return;
-    docRef = db.doc("data/users/" + id + "/leitner");
-    const snap = await docRef.get();
-    const remote = snap.exists ? migrate(JSON.parse(JSON.stringify(snap.data()))) : null;
-    const base = testMode ? realState : state;
-    if (remote && remote.decks && (remote.updatedAt || 0) > (base.updatedAt || 0)) {
-      if (testMode) { realState = remote; realState.activeProfile = null; lsWrite(realState); }
-      else {
-        const active = state.activeProfile;
-        state = remote; state.activeProfile = state.profiles.some((p) => p.id === active) ? active : null;
-        lsWrite(state);
-        if (view.name !== "session") render();
-      }
-    } else { await docRef.set(JSON.parse(JSON.stringify(base))); }
+    mainRef = db.doc("data/users/" + id + "/leitner");
+    elevesRef = mainRef.collection("eleves");
+    if (testMode) { const cur = state; state = realState; await pullAll(); realState = state; state = cur; }
+    else { await pullAll(); if (view.name !== "session") render(); pushChanges(); }
     syncLabel = "Synchronisé avec votre compte"; renderSync();
+    elevesRef.onSnapshot((qs) => {
+      if (testMode) return;
+      let changed = false;
+      qs.docChanges().forEach((ch) => {
+        const id = ch.doc.id;
+        if (ch.type === "removed") {
+          if (synced.prof[id] === undefined || id === busyId()) return;
+          delete synced.prof[id]; state.profiles = state.profiles.filter((p) => p.id !== id); changed = true;
+        } else if (applyRemoteProfile(clone(ch.doc.data()))) changed = true;
+      });
+      if (changed) { lsWrite(state); refreshView(); }
+    }, () => {});
+    mainRef.onSnapshot((snap) => {
+      if (testMode || !snap.exists) return;
+      const m = snap.data(); if (!m || !m.decks) return;
+      const mjs = JSON.stringify({ v: 3, workDays: m.workDays, decks: m.decks, gone: m.gone || {} });
+      if (mjs === synced.main || mjs === JSON.stringify(mainOf(state))) { synced.main = synced.main || mjs; return; }
+      synced.main = mjs; const o = JSON.parse(mjs);
+      state.decks = o.decks; state.workDays = o.workDays; state.gone = o.gone;
+      state.profiles = state.profiles.filter((p) => !o.gone[p.id] || p.id === busyId());
+      lsWrite(state); refreshView();
+    }, () => {});
   } catch { /* on reste sur le stockage local */ }
 }
 
@@ -343,12 +415,14 @@ function stats(p, d, dir) {
   const doneToday = bx.day === t;
   const available = isWork(t) && !doneToday;
   const todayBoxes = boxesFor(next, ints);
-  const newCount = Math.min(unseen, d.settings.newPerDay);
+  const wantedNew = Math.min(unseen, d.settings.newPerDay);
+  const newCount = newAllowed(d, boxes[0], wantedNew);
+  const capped = newCount < wantedNew; // case 1 trop pleine : moins (ou pas) de nouvelles cartes
   const toReview = todayBoxes.reduce((a, k) => a + boxes[k - 1], 0);
   // Dates prévues des 16 prochaines séances (une par jour de séance)
   const startDay = available ? t : t + 1;
   const dates = workDaysFrom(startDay, 16);
-  return { bx, boxes, unseen, next, doneToday, available, todayBoxes, newCount, toReview, n, dates };
+  return { bx, boxes, unseen, next, doneToday, available, todayBoxes, newCount, capped, toReview, n, dates };
 }
 function grade(p, d, dir, card, ok) {
   const bx = boxOf(p, d, dir), n = d.settings.intervals.length, cur = bx.c[card.id];
@@ -447,7 +521,8 @@ function renderHome() {
       ${x.id === d.id ? "" : `<button class="btn" data-pick="${x.id}">Choisir</button>`}
       <button class="btn ghost" data-edit="${x.id}">Modifier</button></div>`).join("");
   let status;
-  if (s.available) status = `Séance <b>${s.next}</b> : ${listFr(order)}${s.newCount ? `, avec ${plural(s.newCount, "nouvelle carte", "nouvelles cartes")} en case 1` : ""}.`;
+  if (s.available) status = `Séance <b>${s.next}</b> : ${listFr(order)}${s.newCount ? `, avec ${plural(s.newCount, "nouvelle carte", "nouvelles cartes")} en case 1` : ""}.`
+    + (s.capped ? ` <span class="help">${s.newCount ? "Moins" : "Pas"} de nouvelles cartes : la case 1 en contient déjà ${s.boxes[0]} (maximum ${box1Cap(d)}).</span>` : "");
   else if (s.doneToday) status = `Séance ${s.next - 1} faite aujourd'hui. Prochaine : ${DAY_LONG[weekday(s.dates[0])]}, séance ${s.next} (${listFr(order)}).`;
   else status = `Pas de séance le ${DAY_LONG[weekday(t)]}. Prochaine : ${DAY_LONG[weekday(s.dates[0])]}, séance ${s.next} (${listFr(order)}).`;
 
@@ -561,7 +636,7 @@ function nextStage() {
     const k = sess.stages[sess.stage];
     sess.q = d.cards.filter((c) => bx.c[c.id] === k).map((c) => ({ id: c.id, box: k }));
     if (k === 1 && sess.newLeft) {
-      sess.q = sess.q.concat(pickNew(d, bx, sess.newLeft).map((c) => ({ id: c.id, box: 1, isNew: true })));
+      sess.q = sess.q.concat(pickNew(d, bx, newAllowed(d, sess.q.length, sess.newLeft)).map((c) => ({ id: c.id, box: 1, isNew: true })));
       sess.newLeft = 0;
     }
     shuffle(sess.q); // ordre aléatoire dans chaque case, nouvelles cartes mêlées à la case 1
@@ -569,7 +644,8 @@ function nextStage() {
     if (sess.q.length) return true;
   }
   if (sess.newLeft) { // case 1 pas au programme : les nouvelles cartes passent quand même
-    sess.q = shuffle(pickNew(d, bx, sess.newLeft).map((c) => ({ id: c.id, box: 1, isNew: true })));
+    const inBox1 = d.cards.filter((c) => bx.c[c.id] === 1).length;
+    sess.q = shuffle(pickNew(d, bx, newAllowed(d, inBox1, sess.newLeft)).map((c) => ({ id: c.id, box: 1, isNew: true })));
     sess.newLeft = 0; sess.i = 0; sess.stages.push(1);
     if (sess.q.length) return true;
   }
@@ -805,6 +881,7 @@ function exitTest() {
   state = realState; realState = null; testMode = false; dayOffset = 0; sess = null;
   state.activeProfile = state.profiles.some((p) => p.id === pid) ? pid : null;
   view = { name: state.activeProfile ? "home" : "who" }; toast("Retour aux vraies données"); render();
+  if (mainRef) pullAll().then(() => { refreshView(); pushChanges(); }).catch(syncFailed);
 }
 function jump(nextSession) {
   if (view.name === "session") { sess = null; view = { name: "home" }; }
@@ -917,7 +994,7 @@ function parseLines(text) {
 }
 function renderEdit() {
   const p = prof(), isNew = !view.id, d = isNew ? null : state.decks.find((x) => x.id === view.id);
-  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset" };
+  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset", maxBox1: 5 };
   const labels = d ? d.labels : { f: "le recto", b: "le verso" };
   const nb = set.intervals.length;
   const ints = (vals) => vals.map((v, i) => `<label style="--c:${BOXC(i + 1)}">Case ${i + 1}<input type="number" min="1" max="365" id="int${i}" value="${v}" aria-label="Case ${i + 1} : toutes les combien de séances"></label>`).join("");
@@ -940,6 +1017,7 @@ function renderEdit() {
       <span class="help" style="margin-top:-6px">Ces noms servent au choix du sens : « Je vois ${esc(labels.f)}, je trouve ${esc(labels.b)} ».</span>
       <div class="row">
         <div class="field"><label class="label" for="npd">Nouvelles cartes par séance</label><input type="number" id="npd" min="0" max="200" value="${set.newPerDay}"></div>
+        <div class="field"><label class="label" for="cap1">Maximum en case 1</label><input type="number" id="cap1" min="0" max="200" value="${set.maxBox1 ?? 5}" aria-describedby="cap1h"><span class="help" id="cap1h">0 = pas de limite</span></div>
         <div class="field"><label class="label" for="nbox">Nombre de cases</label><select id="nbox">${[3, 4, 5, 6, 7].map((n) => `<option ${n === nb ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div class="field"><label class="label" for="nord">Nouvelles cartes choisies</label><select id="nord">
           <option value="random" ${set.newOrder !== "list" ? "selected" : ""}>Au hasard</option>
@@ -986,7 +1064,7 @@ function renderEdit() {
     if (!cards.length) { $("#msg").innerHTML = `<span style="color:var(--ko)">Ajoutez au moins une carte.</span>`; return; }
     const seen = new Set(), uniq = cards.filter((c) => !seen.has(c.id) && seen.add(c.id));
     const intervals = [...app.querySelectorAll("#ints input")].map((x) => Math.max(1, Math.min(365, Math.round(+x.value || 1))));
-    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value };
+    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value, maxBox1: Math.max(0, Math.min(200, Math.round(+$("#cap1").value || 0))) };
     const lab = { f: $("#lf").value.trim() || "le recto", b: $("#lb").value.trim() || "le verso" };
     const langs = $("#lgf") ? { f: $("#lgf").value, b: $("#lgb").value } : null;
     const name = $("#name").value.trim() || "Série sans nom";
@@ -1021,6 +1099,7 @@ connectAccount();
 document.addEventListener("visibilitychange", () => { if (!document.hidden && view.name === "home") render(); });
 })();
 </script>
+
 <script>
 if ("serviceWorker" in navigator) {
   const hadController = !!navigator.serviceWorker.controller;
