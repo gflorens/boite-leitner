@@ -188,6 +188,7 @@ details summary{cursor:pointer;font-weight:700}
 .testbar .when b{font-family:var(--f-display);font-size:1.05rem}
 .testbar .btn{background:var(--paper);color:var(--ink);padding:7px 12px}
 .testpanel p{margin:4px 0 12px}
+.staff{display:block;width:min(360px,94%);height:auto;color:var(--ink);margin:0 auto}
 .libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
 .mic{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:999px;background:var(--soft);font-weight:700;font-size:1.1rem;min-width:min(260px,100%)}
 .micdot{width:14px;height:14px;border-radius:50%;background:var(--ko);animation:pulse 1.2s ease-in-out infinite;flex:none}
@@ -400,6 +401,30 @@ async function connectAccount() {
     }, () => {});
   } catch { /* on reste sur le stockage local */ }
 }
+
+/* ---------- Notes sur une portée : {sol:mi3} dans le texte d'une carte ---------- */
+// Clé de sol (glyphe de la police Noto Music, SIL OFL), unités de police, ligne de sol à y = 0.
+const CLEF_PATH = "M314 801Q300 854 291 906Q282 958 282 1012Q282 1059 288 1100Q295 1142 307 1177Q320 1217 341 1252Q362 1288 386 1311Q409 1334 427 1334Q451 1334 493 1249Q514 1206 524 1156Q534 1106 534 1049Q534 978 515 908Q496 837 460 775Q423 713 372 666L407 498Q422 500 432 501Q442 502 447 502Q508 502 556 468Q604 433 632 377Q661 321 661 254Q661 177 622 116Q582 54 503 25Q508 8 532 -117Q538 -147 541 -164Q544 -182 545 -195Q546 -208 546 -225Q546 -275 522 -314Q497 -354 456 -376Q414 -398 363 -398Q311 -398 271 -378Q231 -359 208 -324Q185 -290 185 -245Q185 -197 212 -165Q238 -133 287 -133Q329 -133 356 -164Q382 -194 382 -236Q382 -272 357 -299Q332 -326 292 -326H282Q308 -365 364 -365Q433 -365 472 -320Q511 -275 511 -205Q511 -188 507 -160Q503 -131 493 -91Q483 -51 478 -25Q472 1 470 12Q436 2 390 2Q304 2 222 52Q142 102 96 184Q50 266 50 361Q50 451 91 530Q132 609 192 675Q253 741 314 801ZM341 826Q364 838 390 870Q416 903 440 945Q464 987 479 1030Q494 1072 494 1106Q494 1142 483 1163Q472 1184 445 1184Q421 1184 398 1162Q376 1140 358 1104Q341 1067 331 1022Q321 977 321 930Q321 898 328 872Q334 846 341 826ZM398 379Q371 373 347 354Q323 334 308 306Q294 279 294 248Q294 223 307 196Q320 170 339 154Q352 142 365 136Q380 129 380 123Q380 120 370 117Q332 126 302 151Q271 176 254 212Q236 247 236 287Q236 330 254 370Q271 410 302 442Q334 474 374 490L345 641Q229 547 174 456Q120 366 120 277Q120 212 154 156Q188 100 247 66Q306 31 380 31Q400 31 420 35Q441 39 464 45ZM495 55Q593 97 593 227Q593 270 571 306Q549 341 512 362Q475 383 429 383Z";
+const NOTE_NAMES = { do: 0, re: 1, ré: 1, mi: 2, fa: 3, sol: 4, la: 5, si: 6 };
+const STAFF_RE = /^\{sol:\s*(do|ré|re|mi|fa|sol|la|si)\s*(-?\d)\}$/i;
+// Convention française : do3 = do du milieu du piano (sous la portée en clé de sol).
+function staffSVG(name, octave) {
+  const step = NOTE_NAMES[name.toLowerCase()] + (octave - 3) * 7; // 0 = do3
+  const y = 80 - step * 5;                                         // lignes de la portée : y = 30 … 70
+  const x = 118;
+  let ledgers = "";
+  for (let ly = 80; ly <= y; ly += 10) ledgers += `<line x1="${x - 13}" x2="${x + 13}" y1="${ly}" y2="${ly}"/>`;
+  for (let ly = 20; ly >= y; ly -= 10) ledgers += `<line x1="${x - 13}" x2="${x + 13}" y1="${ly}" y2="${ly}"/>`;
+  const lines = [30, 40, 50, 60, 70].map((ly) => `<line x1="6" x2="194" y1="${ly}" y2="${ly}"/>`).join("");
+  return `<svg class="staff" viewBox="0 8 200 88" role="img" aria-label="Une note sur la portée en clé de sol">
+    <g stroke="currentColor" stroke-width="1.2">${lines}${ledgers}</g>
+    <path d="${CLEF_PATH}" fill="currentColor" transform="translate(14 60) scale(0.04 -0.04)"/>
+    <g transform="translate(${x} ${y}) rotate(-22)"><ellipse rx="7" ry="4.7" fill="currentColor"/><ellipse rx="3.6" ry="2.2" transform="rotate(-38)" fill="var(--paper)"/></g>
+  </svg>`;
+}
+const isStaff = (t) => STAFF_RE.test(String(t).trim());
+const faceHTML = (t) => { const m = String(t).trim().match(STAFF_RE); return m ? staffSVG(m[1], +m[2]) : esc(t); };
+const plainLabel = (t) => (isStaff(t) ? "portée" : t);
 
 /* ---------- Logique Leitner ---------- */
 const prof = () => state.profiles.find((p) => p.id === state.activeProfile);
@@ -664,7 +689,7 @@ function renderSession() {
   const box = sess.practice ? (boxOf(p, d, sess.dir).c[card.id] || 0) : item.box;
   const tag = item.retry ? "À retenter" : item.isNew ? "Nouvelle" : box ? "Case " + box : "";
   const c = box ? BOXC(box) : "var(--accent)";
-  const long = (s) => (s.length > 24 ? " long" : "");
+  const long = (s) => (!isStaff(s) && s.length > 24 ? " long" : "");
   const fwd = sess.dir === "f";
   const qText = fwd ? card.front : card.back, aText = fwd ? card.back : card.front;
   const qHint = fwd && card.hint ? `<div class="hint">${esc(card.hint)}</div>` : "";
@@ -675,10 +700,10 @@ function renderSession() {
       <div class="chips" aria-label="Déroulement de la séance">${sess.practice ? "" : `<span class="label">Séance ${sess.n}</span>`}${chips}</div></div>
     <div class="scene" id="scene" role="button" tabindex="0" aria-label="Retourner la carte">
       <div class="card ${sess.flipped ? "flipped" : ""}" id="card">
-        <div class="face front" style="--c:${c}"><div class="main${long(qText)}">${esc(qText)}</div>${qHint}
+        <div class="face front" style="--c:${c}"><div class="main${long(qText)}">${faceHTML(qText)}</div>${qHint}
           <div class="meta"><span>${tag}</span><span>${esc(p.name)}${sess.practice ? " · entraînement" : ""}</span></div></div>
-        <div class="face back" style="--c:${c}"><div class="main${long(aText)}">${esc(aText)}</div>
-          <div class="meta"><span>${tag}</span><span>${esc(qText.split("\n")[0])}</span></div></div>
+        <div class="face back" style="--c:${c}"><div class="main${long(aText)}">${faceHTML(aText)}</div>
+          <div class="meta"><span>${tag}</span><span>${esc(plainLabel(qText).split("\n")[0])}</span></div></div>
       </div></div>
     <div class="answer" id="answer">${sess.flipped
       ? `<button class="btn ko big" id="ko">Je ne savais pas</button><button class="btn ok big" id="ok">Je savais</button>`
@@ -945,6 +970,10 @@ const LIBRARY = [
       "Napoléon Ier sacré empereur ; 1804", "Abolition définitive de l'esclavage en France ; 1848", "Lois de Jules Ferry sur l'école ; 1881-1882",
       "Première Guerre mondiale ; 1914-1918", "Seconde Guerre mondiale ; 1939-1945", "Droit de vote des femmes en France ; 1944",
       "Début de la Ve République ; 1958", "Premiers pas de l'homme sur la Lune ; 1969"] },
+  { key: "notes-sol", name: "Notes en clé de sol (do grave à sol aigu)", theme: "Musique", labels: { f: "la note sur la portée", b: "son nom" }, newPerDay: 3,
+    about: "Les 12 notes du do sous la portée au sol au-dessus. Une note qui existe deux fois porte (grave) ou (aigu).",
+    lines: ["{sol:do3} ; do (grave)", "{sol:ré3} ; ré (grave)", "{sol:mi3} ; mi (grave)", "{sol:fa3} ; fa (grave)", "{sol:sol3} ; sol (grave)", "{sol:la3} ; la",
+      "{sol:si3} ; si", "{sol:do4} ; do (aigu)", "{sol:ré4} ; ré (aigu)", "{sol:mi4} ; mi (aigu)", "{sol:fa4} ; fa (aigu)", "{sol:sol4} ; sol (aigu)"] },
   { key: "en-time", name: "Jours et mois en anglais", theme: "Anglais", labels: { f: "le mot français", b: "le mot anglais" }, newPerDay: 4, langs: { f: "fr-FR", b: "en-GB" },
     about: "Les 7 jours et les 12 mois.",
     lines: ["lundi ; Monday", "mardi ; Tuesday", "mercredi ; Wednesday", "jeudi ; Thursday", "vendredi ; Friday", "samedi ; Saturday", "dimanche ; Sunday",
@@ -1005,7 +1034,7 @@ function renderEdit() {
       <div class="field"><label class="label" for="name">Nom de la série</label><input id="name" required value="${esc(d ? d.name : "")}" placeholder="Ex. : Capitales d'Europe"></div>
       <div class="field"><label class="label" for="cards">Cartes, une par ligne</label>
         <textarea id="cards" spellcheck="false" placeholder="France ; Paris&#10;Italie ; Rome">${esc(d ? d.cards.map(cardToLine).join("\n") : "")}</textarea>
-        <span class="help">Recto <b>;</b> verso. Un <b>|</b> dans le verso passe à la ligne. Un indice entre crochets après le recto s'affiche sous la question, par exemple <code>12 [avec le 3] ; 3 × 4 | 4 × 3</code>. Les cartes inchangées gardent leur case.</span></div>
+        <span class="help">Recto <b>;</b> verso. Un <b>|</b> dans le verso passe à la ligne. Un indice entre crochets après le recto s'affiche sous la question, par exemple <code>12 [avec le 3] ; 3 × 4 | 4 × 3</code>. Pour une note de musique, écrivez <code>{sol:mi3}</code> au recto : elle s'affiche sur une portée en clé de sol (do3 = do sous la portée). Les cartes inchangées gardent leur case.</span></div>
       <div class="row">
         <div class="field"><label class="label" for="lf">Le recto montre…</label><input id="lf" value="${esc(labels.f)}" placeholder="le pays"></div>
         <div class="field"><label class="label" for="lb">Le verso montre…</label><input id="lb" value="${esc(labels.b)}" placeholder="la capitale"></div>
