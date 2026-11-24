@@ -207,6 +207,13 @@ details summary{cursor:pointer;font-weight:700}
 .pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.78rem;font-weight:700}
 .pill.ok{background:var(--ok);color:var(--paper)}
 .pill.todo{background:var(--soft);color:var(--ink);border:1px solid var(--line)}
+.timerbox{width:min(440px,100%);display:flex;align-items:center;gap:10px;min-height:22px}
+.timer{flex:1;height:12px;border-radius:999px;background:var(--soft);position:relative;overflow:hidden}
+.timer i{position:absolute;inset:0 auto 0 0;width:100%;border-radius:999px;background:var(--ok);animation:countdown var(--t) linear forwards}
+.timer.stopped i{animation-play-state:paused}
+.timer.out{box-shadow:inset 0 0 0 2px var(--ko)}
+.tlabel{font-size:.85rem;font-weight:700;color:var(--ko);white-space:nowrap}
+@keyframes countdown{0%{width:100%;background:var(--ok)}55%{background:var(--b3)}80%{background:var(--b2)}100%{width:0;background:var(--ko)}}
 .libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
 .mic{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:999px;background:var(--soft);font-weight:700;font-size:1.1rem;min-width:min(260px,100%)}
 .micdot{width:14px;height:14px;border-radius:50%;background:var(--ko);animation:pulse 1.2s ease-in-out infinite;flex:none}
@@ -256,6 +263,9 @@ const freqLabel = (v) => (v === 1 ? "à chaque séance" : `toutes les ${v} séan
 // Plafond de cartes en case 1 (0 = pas de limite ; 5 par défaut, y compris pour les séries déjà créées)
 const box1Cap = (d) => (d.settings.maxBox1 ?? 5);
 const newAllowed = (d, inBox1, wanted) => { const c = box1Cap(d); return c ? Math.min(wanted, Math.max(0, c - inBox1)) : wanted; };
+// Décompte affiché sous forme de barre pendant qu'une carte attend sa réponse (0 = sans décompte ; 4 s par défaut)
+const timerSecs = (d) => (d.settings.timer ?? 4);
+function stopTimer() { const t = $("#timer"); if (t) t.classList.add("stopped"); }
 // Cases au programme de la séance n, de la plus haute à la plus basse.
 const boxesFor = (n, intervals) => intervals.map((v, i) => (n % v === 0 ? i + 1 : 0)).filter(Boolean).reverse();
 
@@ -274,7 +284,7 @@ function multiplicationDeck() {
 }
 function newDeck(name, cards, s = {}, labels) {
   return { id: uid("d"), name, cards, labels: labels || { f: "le recto", b: "le verso" },
-    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random", maxBox1: s.maxBox1 ?? 5 } };
+    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random", maxBox1: s.maxBox1 ?? 5, timer: s.timer ?? 4 } };
 }
 const noArt = (s) => s.replace(/^(les\s+|le\s+|la\s+|l['’]\s*)/i, "");
 const dirLabel = (d, dir) => dir === "f" ? `Je vois ${d.labels.f}, je trouve ${d.labels.b}` : `Je vois ${d.labels.b}, je trouve ${d.labels.f}`;
@@ -768,6 +778,7 @@ function renderSession() {
   app.innerHTML = `<div class="session">
     <div class="sessbar"><button class="btn ghost" id="quit">← Arrêter</button>
       <div class="chips" aria-label="Déroulement de la séance">${sess.practice ? "" : `<span class="label">Séance ${sess.n}</span>`}${chips}</div></div>
+    ${timerSecs(d) ? `<div class="timerbox"><div class="timer${sess.flipped ? " stopped" : ""}" id="timer" style="--t:${timerSecs(d)}s" role="timer" aria-label="Décompte de ${timerSecs(d)} secondes"><i></i></div><span class="tlabel" id="tlabel" aria-live="polite"></span></div>` : ""}
     <div class="scene" id="scene" role="button" tabindex="0" aria-label="Retourner la carte">
       <div class="card ${sess.flipped ? "flipped" : ""}" id="card">
         <div class="face front" style="--c:${c}"><div class="main${long(qText)}">${faceHTML(qText)}</div>${qHint}
@@ -782,6 +793,8 @@ function renderSession() {
     ${testMode ? `<div class="answer"><span class="help">Mode test :</span><button class="btn" data-auto="1">Finir : tout juste</button><button class="btn" data-auto="0.8">Finir : 80 % justes</button><button class="btn" data-auto="0">Finir : tout faux</button></div>` : ""}
   </div>`;
   app.querySelectorAll("[data-auto]").forEach((b) => (b.onclick = () => autoFinish(+b.dataset.auto)));
+  const bar = $("#timer i");
+  if (bar) bar.addEventListener("animationend", () => { const t = $("#timer"); if (t && !t.classList.contains("stopped")) { t.classList.add("out"); $("#tlabel").textContent = "Temps écoulé"; } });
   $("#scene").onclick = flip; $("#scene").onkeydown = (e) => { if (e.key === "Enter") flip(); };
   $("#flip") && ($("#flip").onclick = flip);
   $("#ok") && ($("#ok").onclick = () => answer(true));
@@ -792,7 +805,7 @@ function renderSession() {
 }
 function flip() {
   if (sess.flipped) return;
-  stopListening();
+  stopListening(); stopTimer();
   sess.flipped = true; $("#card").classList.add("flipped");
   $("#answer").innerHTML = `<button class="btn ko big" id="ko">Je ne savais pas</button><button class="btn ok big" id="ok">Je savais</button>`;
   $("#ok").onclick = () => answer(true); $("#ko").onclick = () => answer(false); $("#ok").focus({ preventScroll: true });
@@ -930,7 +943,7 @@ function micTurn() {
       $("#again").onclick = micTurn; $("#dunno").onclick = flip; $("#again").focus({ preventScroll: true });
       return;
     }
-    sess.flipped = true; $("#card").classList.add("flipped");
+    sess.flipped = true; stopTimer(); $("#card").classList.add("flipped");
     if (r.ok) {
       box.innerHTML = `<div class="verdict ok">Juste !</div>`;
       const i = sess.i; setTimeout(() => { if (sess && sess.i === i && view.name === "session") answer(true); }, 1000);
@@ -1093,7 +1106,7 @@ function parseLines(text) {
 }
 function renderEdit() {
   const p = prof(), isNew = !view.id, d = isNew ? null : state.decks.find((x) => x.id === view.id);
-  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset", maxBox1: 5 };
+  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset", maxBox1: 5, timer: 4 };
   const labels = d ? d.labels : { f: "le recto", b: "le verso" };
   const nb = set.intervals.length;
   const ints = (vals) => vals.map((v, i) => `<label style="--c:${BOXC(i + 1)}">Case ${i + 1}<input type="number" min="1" max="365" id="int${i}" value="${v}" aria-label="Case ${i + 1} : toutes les combien de séances"></label>`).join("");
@@ -1117,6 +1130,7 @@ function renderEdit() {
       <div class="row">
         <div class="field"><label class="label" for="npd">Nouvelles cartes par séance</label><input type="number" id="npd" min="0" max="200" value="${set.newPerDay}"></div>
         <div class="field"><label class="label" for="cap1">Maximum en case 1</label><input type="number" id="cap1" min="0" max="200" value="${set.maxBox1 ?? 5}" aria-describedby="cap1h"><span class="help" id="cap1h">0 = pas de limite</span></div>
+        <div class="field"><label class="label" for="tmr">Décompte (secondes)</label><input type="number" id="tmr" min="0" max="60" value="${set.timer ?? 4}" aria-describedby="tmrh"><span class="help" id="tmrh">0 = pas de barre</span></div>
         <div class="field"><label class="label" for="nbox">Nombre de cases</label><select id="nbox">${[3, 4, 5, 6, 7].map((n) => `<option ${n === nb ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div class="field"><label class="label" for="nord">Nouvelles cartes choisies</label><select id="nord">
           <option value="random" ${set.newOrder !== "list" ? "selected" : ""}>Au hasard</option>
@@ -1163,7 +1177,7 @@ function renderEdit() {
     if (!cards.length) { $("#msg").innerHTML = `<span style="color:var(--ko)">Ajoutez au moins une carte.</span>`; return; }
     const seen = new Set(), uniq = cards.filter((c) => !seen.has(c.id) && seen.add(c.id));
     const intervals = [...app.querySelectorAll("#ints input")].map((x) => Math.max(1, Math.min(365, Math.round(+x.value || 1))));
-    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value, maxBox1: Math.max(0, Math.min(200, Math.round(+$("#cap1").value || 0))) };
+    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value, maxBox1: Math.max(0, Math.min(200, Math.round(+$("#cap1").value || 0))), timer: Math.max(0, Math.min(60, Math.round(+$("#tmr").value || 0))) };
     const lab = { f: $("#lf").value.trim() || "le recto", b: $("#lb").value.trim() || "le verso" };
     const langs = $("#lgf") ? { f: $("#lgf").value, b: $("#lgb").value } : null;
     const name = $("#name").value.trim() || "Série sans nom";
