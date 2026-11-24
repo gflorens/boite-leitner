@@ -189,6 +189,24 @@ details summary{cursor:pointer;font-weight:700}
 .testbar .btn{background:var(--paper);color:var(--ink);padding:7px 12px}
 .testpanel p{margin:4px 0 12px}
 .staff{display:block;width:min(360px,94%);height:auto;color:var(--ink);margin:0 auto}
+.tablewrap{overflow-x:auto;margin-top:14px;-webkit-overflow-scrolling:touch}
+.ctable{border-collapse:collapse;width:100%;font-size:.92rem;font-variant-numeric:tabular-nums}
+.ctable th,.ctable td{padding:7px 8px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+.ctable thead th{font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);vertical-align:bottom}
+.ctable .c{text-align:center}
+.ctable tbody tr:hover{background:var(--soft)}
+.ctable .cnt{display:inline-block;min-width:26px;padding:1px 6px;border-radius:6px;border-bottom:3px solid var(--c)}
+.ctable td.over .cnt{background:var(--ko);color:var(--paper);border-bottom-color:var(--ko);font-weight:700}
+.row .field.segfield{flex:0 0 auto}
+.segfield .seg{flex-wrap:nowrap}
+.segfield .seg button{white-space:nowrap}
+@media (max-width:560px){.row .field.segfield{flex:1 1 100%}.segfield .seg{display:flex;width:100%}.segfield .seg button{flex:1;white-space:normal;text-align:center;font-size:.88rem;padding:8px 6px}}
+.ctable tbody th,.ctable thead th:first-child{position:sticky;left:0;background:var(--paper);z-index:1}
+.ctable tbody tr:hover th{background:var(--soft)}
+.linkbtn{border:0;background:none;padding:0;font-weight:700;color:var(--accent);cursor:pointer;text-align:left}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:.78rem;font-weight:700}
+.pill.ok{background:var(--ok);color:var(--paper)}
+.pill.todo{background:var(--soft);color:var(--ink);border:1px solid var(--line)}
 .libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
 .mic{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:999px;background:var(--soft);font-weight:700;font-size:1.1rem;min-width:min(260px,100%)}
 .micdot{width:14px;height:14px;border-radius:50%;background:var(--ko);animation:pulse 1.2s ease-in-out infinite;flex:none}
@@ -336,7 +354,7 @@ function pushChanges() {
   lsWrite(state);
 }
 const busyId = () => (view.name === "session" && sess ? state.activeProfile : null);
-function refreshView() { renderSync(); if (view.name === "who" || view.name === "home") render(); }
+function refreshView() { renderSync(); if (view.name === "who" || view.name === "home" || view.name === "class") render(); }
 // Lit le compte et fusionne : pour chaque élève, la version la plus récente l'emporte.
 async function pullAll() {
   const [ms, es] = await Promise.all([mainRef.get(), elevesRef.get()]);
@@ -481,6 +499,57 @@ function bindHeader() {
   $("#switch").onclick = () => { sess = null; state.activeProfile = null; view = { name: "who" }; render(); };
 }
 
+
+/* Tableau de la classe (pour l'enseignant) : où en est chaque élève dans une série et un sens */
+const longDate = (n) => new Date(n * 864e5).toLocaleDateString("fr-FR", { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" }).replace(/\./g, "");
+function renderClass() {
+  const d = state.decks.find((x) => x.id === view.deck) || state.decks[0], dir = view.dir || "f", sort = view.sort || "seance";
+  const t = today(), work = isWork(t), n = d.settings.intervals.length, capN = box1Cap(d);
+  const rows = state.profiles.map((p) => {
+    const bx = ((p.prog[d.id] || {})[dir]) || emptyBox();
+    const boxes = Array(n).fill(0); let unseen = 0;
+    for (const c of d.cards) { const b = bx.c[c.id]; if (b) boxes[Math.min(b, n) - 1]++; else unseen++; }
+    return { p, s: bx.s, day: bx.day, boxes, unseen, doneToday: bx.day === t };
+  });
+  rows.sort((a, b) => sort === "nom" ? a.p.name.localeCompare(b.p.name, "fr") : a.s - b.s || a.p.name.localeCompare(b.p.name, "fr"));
+  const dist = {}; rows.forEach((r) => (dist[r.s] = (dist[r.s] || 0) + 1));
+  const done = rows.filter((r) => r.doneToday).length;
+  const chips = Object.keys(dist).map(Number).sort((a, b) => b - a)
+    .map((s) => `<span class="chip"><b class="num">${dist[s]}</b>&nbsp;${s ? `à la séance ${s}` : "pas commencé"}</span>`).join("");
+  const today_ = (r) => r.doneToday ? `<span class="pill ok">faite</span>` : work ? `<span class="pill todo">à faire</span>` : `<span class="muted">—</span>`;
+  const body = rows.map((r) => `<tr>
+      <th scope="row"><button class="linkbtn" data-open="${r.p.id}">${esc(r.p.name)}</button></th>
+      <td class="num c">${r.s}</td>
+      <td>${r.day ? esc(longDate(r.day)) : `<span class="muted">—</span>`}</td>
+      <td>${today_(r)}</td>
+      ${r.boxes.map((c, i) => `<td class="num c${i === 0 && capN && c > capN ? " over" : ""}"><span class="cnt" style="--c:${BOXC(i + 1)}">${c}</span></td>`).join("")}
+      <td class="num c muted">${r.unseen}</td></tr>`).join("");
+  app.innerHTML = `<header class="top">${brand()}<button class="btn ghost" id="back">← Retour aux prénoms</button></header>
+  <section class="panel">
+    <h2>Tableau de la classe</h2>
+    <div class="row" style="margin-top:12px;align-items:flex-end">
+      <div class="field"><label class="label" for="clDeck">Série</label><select id="clDeck">${state.decks.map((x) => `<option value="${x.id}" ${x.id === d.id ? "selected" : ""}>${esc(x.name)}</option>`).join("")}</select></div>
+      <div class="field segfield"><span class="label">Sens</span><div class="seg" role="group" aria-label="Sens" style="margin-top:0">${["f", "r"].map((x) => `<button type="button" data-cdir="${x}" aria-pressed="${x === dir}">${esc(dirShort(d, x))}</button>`).join("")}</div></div>
+      <div class="field"><label class="label" for="clSort">Trier par</label><select id="clSort"><option value="seance" ${sort === "seance" ? "selected" : ""}>Séance (les moins avancés d'abord)</option><option value="nom" ${sort === "nom" ? "selected" : ""}>Prénom</option></select></div>
+    </div>
+    ${rows.length ? `<p class="status">${work ? `Aujourd'hui : <b>${done}</b> / ${rows.length} séances faites.` : `Pas de séance le ${DAY_LONG[weekday(t)]}.`}</p>
+    <div class="chips" style="margin-top:10px">${chips}</div>
+    <div class="tablewrap"><table class="ctable">
+      <thead><tr><th scope="col">Élève</th><th scope="col" class="c">Séances faites</th><th scope="col">Dernière séance</th><th scope="col">Aujourd'hui</th>
+        ${d.settings.intervals.map((_, i) => `<th scope="col" class="c">Case ${i + 1}</th>`).join("")}<th scope="col" class="c">Jamais vues</th></tr></thead>
+      <tbody>${body}</tbody></table></div>
+    <p class="help">Cliquez sur un prénom pour ouvrir sa boîte.${capN ? ` En rouge : plus de ${capN} cartes en case 1.` : ""}</p>`
+    : `<p class="help">Aucun élève pour l'instant.</p>`}
+  </section>`;
+  $("#back").onclick = () => { view = { name: "who" }; render(); };
+  $("#clDeck").onchange = (e) => { view.deck = e.target.value; render(); };
+  $("#clSort").onchange = (e) => { view.sort = e.target.value; render(); };
+  app.querySelectorAll("[data-cdir]").forEach((b) => (b.onclick = () => { view.dir = b.dataset.cdir; render(); }));
+  app.querySelectorAll("[data-open]").forEach((b) => (b.onclick = () => {
+    const p = state.profiles.find((x) => x.id === b.dataset.open); p.activeDeck = d.id; p.dirs[d.id] = dir;
+    state.activeProfile = p.id; save(); view = { name: "home" }; render(); }));
+}
+
 /* Choix du prénom */
 function renderWho() {
   const manage = view.manage;
@@ -494,7 +563,7 @@ function renderWho() {
       : `<div class="names">${names.map((p) => `<button class="namebtn" data-who="${p.id}">${esc(p.name)}</button>`).join("")}</div>
       <form class="addname" id="addf"><input id="newName" placeholder="Nouveau prénom" maxlength="30" autocomplete="off" aria-label="Nouveau prénom">
         <button class="btn ${names.length ? "" : "primary"}" type="submit">Ajouter</button></form>
-      ${names.length ? `<button class="btn ghost" id="manage">Renommer ou supprimer des prénoms</button>` : ""}`}
+      ${names.length ? `<div style="display:flex;gap:8px;flex-wrap:wrap;justify-content:center"><button class="btn" id="classBtn">Tableau de la classe</button><button class="btn ghost" id="manage">Renommer ou supprimer des prénoms</button></div>` : ""}`}
   </section>`;
   if (manage) {
     $("#endManage").onclick = () => { view = { name: "who" }; render(); };
@@ -518,6 +587,7 @@ function renderWho() {
       view = { name: "home" }; render();
     };
     $("#manage") && ($("#manage").onclick = () => { view = { name: "who", manage: true }; render(); });
+    $("#classBtn") && ($("#classBtn").onclick = () => { view = { name: "class" }; render(); });
     if (!names.length) $("#newName").focus();
   }
 }
@@ -1111,11 +1181,12 @@ function renderEdit() {
 
 function render() {
   renderTestbar();
-  if (view.name !== "who" && !prof()) view = { name: "who" };
+  if (view.name !== "who" && view.name !== "class" && !prof()) view = { name: "who" };
   if (view.name === "who") renderWho();
   else if (view.name === "session") renderSession();
   else if (view.name === "edit") renderEdit();
   else if (view.name === "library") renderLibrary();
+  else if (view.name === "class") renderClass();
   else renderHome();
   if (view.name !== "session") window.scrollTo(0, 0);
 }
