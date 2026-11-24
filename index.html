@@ -265,6 +265,9 @@ const box1Cap = (d) => (d.settings.maxBox1 ?? 5);
 const newAllowed = (d, inBox1, wanted) => { const c = box1Cap(d); return c ? Math.min(wanted, Math.max(0, c - inBox1)) : wanted; };
 // Décompte affiché sous forme de barre pendant qu'une carte attend sa réponse (0 = sans décompte ; 4 s par défaut)
 const timerSecs = (d) => (d.settings.timer ?? 4);
+// Réponse juste donnée après la fin du décompte : "stay" = la carte reste dans sa case, "fail" = comptée ratée, "ok" = comptée juste
+const lateMode = (d) => (d.settings.lateMode || "stay");
+const LATE_LABEL = { stay: "Temps écoulé : la carte ne montera pas", fail: "Temps écoulé : la carte comptera comme ratée", ok: "Temps écoulé" };
 function stopTimer() { const t = $("#timer"); if (t) t.classList.add("stopped"); }
 // Cases au programme de la séance n, de la plus haute à la plus basse.
 const boxesFor = (n, intervals) => intervals.map((v, i) => (n % v === 0 ? i + 1 : 0)).filter(Boolean).reverse();
@@ -284,7 +287,7 @@ function multiplicationDeck() {
 }
 function newDeck(name, cards, s = {}, labels) {
   return { id: uid("d"), name, cards, labels: labels || { f: "le recto", b: "le verso" },
-    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random", maxBox1: s.maxBox1 ?? 5, timer: s.timer ?? 4 } };
+    settings: { newPerDay: s.newPerDay ?? 10, intervals: (s.intervals || DEFAULT_INTERVALS[5]).slice(), failMode: s.failMode || "reset", newOrder: s.newOrder || "random", maxBox1: s.maxBox1 ?? 5, timer: s.timer ?? 4, lateMode: s.lateMode || "stay" } };
 }
 const noArt = (s) => s.replace(/^(les\s+|le\s+|la\s+|l['’]\s*)/i, "");
 const dirLabel = (d, dir) => dir === "f" ? `Je vois ${d.labels.f}, je trouve ${d.labels.b}` : `Je vois ${d.labels.b}, je trouve ${d.labels.f}`;
@@ -477,10 +480,11 @@ function stats(p, d, dir) {
   const dates = workDaysFrom(startDay, 16);
   return { bx, boxes, unseen, next, doneToday, available, todayBoxes, newCount, capped, toReview, n, dates };
 }
-function grade(p, d, dir, card, ok) {
+function grade(p, d, dir, card, ok, hold) {
   const bx = boxOf(p, d, dir), n = d.settings.intervals.length, cur = bx.c[card.id];
   let b;
-  if (ok) b = cur ? Math.min(cur + 1, n) : Math.min(2, n);
+  if (ok && hold) b = cur || 1; // juste mais hors délai : la carte ne monte pas
+  else if (ok) b = cur ? Math.min(cur + 1, n) : Math.min(2, n);
   else b = d.settings.failMode === "down" && cur ? Math.max(1, cur - 1) : 1;
   bx.c[card.id] = b;
   const t = today(), L = p.log[t] || [0, 0]; L[0]++; if (ok) L[1]++; p.log[t] = L;
@@ -724,7 +728,7 @@ function startSession(practice) {
   }
   sess.mic = micAvailable() && p.answerMode === "mic";
   if (sess.mic && !navigator.onLine) { sess.mic = false; toast("Pas de connexion : le micro ne marche pas, on retourne les cartes"); }
-  Object.assign(sess, { flipped: false, firstTry: 0, firstOk: 0, retries: new Set(), moves: [], answered: 0 });
+  Object.assign(sess, { flipped: false, firstTry: 0, firstOk: 0, retries: new Set(), moves: [], answered: 0, late: false, lateCount: 0 });
   if (!practice) nextStage();
   view = { name: "session" }; render();
 }
@@ -766,6 +770,7 @@ function renderSession() {
   if (sess.i >= sess.q.length) { if (sess.practice || !nextStage()) return finishSession(); }
   const item = sess.q[sess.i], card = d.cards.find((c) => c.id === item.id);
   if (!card) { sess.i++; return renderSession(); }
+  if (!sess.flipped) sess.late = false;
   const box = sess.practice ? (boxOf(p, d, sess.dir).c[card.id] || 0) : item.box;
   const tag = item.retry ? "À retenter" : item.isNew ? "Nouvelle" : box ? "Case " + box : "";
   const c = box ? BOXC(box) : "var(--accent)";
@@ -794,7 +799,7 @@ function renderSession() {
   </div>`;
   app.querySelectorAll("[data-auto]").forEach((b) => (b.onclick = () => autoFinish(+b.dataset.auto)));
   const bar = $("#timer i");
-  if (bar) bar.addEventListener("animationend", () => { const t = $("#timer"); if (t && !t.classList.contains("stopped")) { t.classList.add("out"); $("#tlabel").textContent = "Temps écoulé"; } });
+  if (bar) bar.addEventListener("animationend", () => { const t = $("#timer"); if (t && !t.classList.contains("stopped")) { t.classList.add("out"); if (!sess.flipped) sess.late = true; $("#tlabel").textContent = sess.practice ? "Temps écoulé" : LATE_LABEL[lateMode(d)]; } });
   $("#scene").onclick = flip; $("#scene").onkeydown = (e) => { if (e.key === "Enter") flip(); };
   $("#flip") && ($("#flip").onclick = flip);
   $("#ok") && ($("#ok").onclick = () => answer(true));
@@ -812,9 +817,12 @@ function flip() {
 }
 function record(ok) {
   const p = prof(), d = deckOf(p), item = sess.q[sess.i], card = d.cards.find((c) => c.id === item.id);
+  const late = !!sess.late && ok && !item.retry && !sess.practice;
+  if (late) { sess.lateCount++; if (lateMode(d) === "fail") ok = false; }
+  sess.late = false;
   if (!item.retry) {
     sess.firstTry++; if (ok) sess.firstOk++; else sess.retries.add(item.id);
-    if (!sess.practice) { const m = grade(p, d, sess.dir, card, ok); sess.moves.push(m); }
+    if (!sess.practice) { const m = grade(p, d, sess.dir, card, ok, late && lateMode(d) === "stay"); sess.moves.push(m); }
   }
   // Ratée en case 1 (ou en entraînement) : elle revient un peu plus loin, sans changer de case
   if (!ok && (sess.practice || item.box === 1)) sess.q.splice(Math.min(sess.q.length, sess.i + 4), 0, { id: item.id, box: item.box, retry: true });
@@ -832,12 +840,12 @@ function autoFinish(rate) {
 function renderDone() {
   const p = prof(), d = deckOf(p), s = stats(p, d, sess.dir);
   const pct = sess.firstTry ? Math.round((sess.firstOk / sess.firstTry) * 100) : 0;
-  const up = sess.moves.filter((m) => m.to > m.from).length, down = sess.moves.filter((m) => m.from && m.to < m.from).length;
+  const up = sess.moves.filter((m) => m.to > Math.max(m.from, 1)).length, down = sess.moves.filter((m) => m.from && m.to < m.from).length;
   const nextBoxes = listFr(boxesFor(s.next, d.settings.intervals).map((k) => "case " + k));
   app.innerHTML = header() + `<section class="panel done">
     <span class="label">${sess.practice ? "Entraînement terminé" : `Séance ${sess.n} terminée`} · ${esc(p.name)}</span>
     <div class="score num">${sess.firstOk} / ${sess.firstTry}</div>
-    <p style="margin:0">${pct} % de réussite du premier coup.${sess.practice ? "" : ` ${plural(up, "carte monte", "cartes montent")} d'une case${down ? `, ${plural(down, "carte redescend", "cartes redescendent")}` : ""}.`}</p>
+    <p style="margin:0">${pct} % de réussite du premier coup.${sess.practice ? "" : ` ${plural(up, "carte monte", "cartes montent")} d'une case${down ? `, ${plural(down, "carte redescend", "cartes redescendent")}` : ""}.`}${sess.lateCount ? ` ${plural(sess.lateCount, "réponse juste", "réponses justes")} hors délai.` : ""}</p>
     <p class="muted" style="margin:0">${sess.practice ? "Les cases n'ont pas bougé." : `Prochaine séance (${s.next}) ${DAY_LONG[weekday(s.dates[0])]} : ${nextBoxes}.`}</p>
     <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:center">
       <button class="btn primary big" id="back">Revenir à la boîte</button><button class="btn big" id="bye">Élève suivant</button></div></section>`;
@@ -1106,7 +1114,7 @@ function parseLines(text) {
 }
 function renderEdit() {
   const p = prof(), isNew = !view.id, d = isNew ? null : state.decks.find((x) => x.id === view.id);
-  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset", maxBox1: 5, timer: 4 };
+  const set = d ? d.settings : { newPerDay: 10, intervals: DEFAULT_INTERVALS[5], failMode: "reset", maxBox1: 5, timer: 4, lateMode: "stay" };
   const labels = d ? d.labels : { f: "le recto", b: "le verso" };
   const nb = set.intervals.length;
   const ints = (vals) => vals.map((v, i) => `<label style="--c:${BOXC(i + 1)}">Case ${i + 1}<input type="number" min="1" max="365" id="int${i}" value="${v}" aria-label="Case ${i + 1} : toutes les combien de séances"></label>`).join("");
@@ -1131,6 +1139,10 @@ function renderEdit() {
         <div class="field"><label class="label" for="npd">Nouvelles cartes par séance</label><input type="number" id="npd" min="0" max="200" value="${set.newPerDay}"></div>
         <div class="field"><label class="label" for="cap1">Maximum en case 1</label><input type="number" id="cap1" min="0" max="200" value="${set.maxBox1 ?? 5}" aria-describedby="cap1h"><span class="help" id="cap1h">0 = pas de limite</span></div>
         <div class="field"><label class="label" for="tmr">Décompte (secondes)</label><input type="number" id="tmr" min="0" max="60" value="${set.timer ?? 4}" aria-describedby="tmrh"><span class="help" id="tmrh">0 = pas de barre</span></div>
+        <div class="field"><label class="label" for="late">Juste mais hors délai</label><select id="late">
+          <option value="stay" ${(set.lateMode || "stay") === "stay" ? "selected" : ""}>La carte ne monte pas</option>
+          <option value="fail" ${set.lateMode === "fail" ? "selected" : ""}>Compte comme ratée</option>
+          <option value="ok" ${set.lateMode === "ok" ? "selected" : ""}>Compte comme juste</option></select></div>
         <div class="field"><label class="label" for="nbox">Nombre de cases</label><select id="nbox">${[3, 4, 5, 6, 7].map((n) => `<option ${n === nb ? "selected" : ""}>${n}</option>`).join("")}</select></div>
         <div class="field"><label class="label" for="nord">Nouvelles cartes choisies</label><select id="nord">
           <option value="random" ${set.newOrder !== "list" ? "selected" : ""}>Au hasard</option>
@@ -1177,7 +1189,7 @@ function renderEdit() {
     if (!cards.length) { $("#msg").innerHTML = `<span style="color:var(--ko)">Ajoutez au moins une carte.</span>`; return; }
     const seen = new Set(), uniq = cards.filter((c) => !seen.has(c.id) && seen.add(c.id));
     const intervals = [...app.querySelectorAll("#ints input")].map((x) => Math.max(1, Math.min(365, Math.round(+x.value || 1))));
-    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value, maxBox1: Math.max(0, Math.min(200, Math.round(+$("#cap1").value || 0))), timer: Math.max(0, Math.min(60, Math.round(+$("#tmr").value || 0))) };
+    const settings = { newPerDay: Math.max(0, Math.min(200, Math.round(+$("#npd").value || 0))), intervals, failMode: $("#fail").value, newOrder: $("#nord").value, maxBox1: Math.max(0, Math.min(200, Math.round(+$("#cap1").value || 0))), timer: Math.max(0, Math.min(60, Math.round(+$("#tmr").value || 0))), lateMode: $("#late").value };
     const lab = { f: $("#lf").value.trim() || "le recto", b: $("#lb").value.trim() || "le verso" };
     const langs = $("#lgf") ? { f: $("#lgf").value, b: $("#lgb").value } : null;
     const name = $("#name").value.trim() || "Série sans nom";
