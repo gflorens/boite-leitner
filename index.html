@@ -214,6 +214,8 @@ details summary{cursor:pointer;font-weight:700}
 .timer.out{box-shadow:inset 0 0 0 2px var(--ko)}
 .tlabel{font-size:.85rem;font-weight:700;color:var(--ko);white-space:nowrap}
 @keyframes countdown{0%{width:100%;background:var(--ok)}55%{background:var(--b3)}80%{background:var(--b2)}100%{width:0;background:var(--ko)}}
+.check{display:flex;align-items:center;gap:8px;margin-top:12px;font-weight:700;cursor:pointer;width:fit-content}
+.check input{width:20px;height:20px;accent-color:var(--accent);margin:0;cursor:pointer}
 .libh{font-size:1rem;margin:20px 0 0;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;font-family:var(--f-body)}
 .mic{display:flex;align-items:center;justify-content:center;gap:10px;padding:12px 20px;border-radius:999px;background:var(--soft);font-weight:700;font-size:1.1rem;min-width:min(260px,100%)}
 .micdot{width:14px;height:14px;border-radius:50%;background:var(--ko);animation:pulse 1.2s ease-in-out infinite;flex:none}
@@ -268,6 +270,8 @@ const timerSecs = (d) => (d.settings.timer ?? 4);
 // Réponse juste donnée après la fin du décompte : "stay" = la carte reste dans sa case, "fail" = comptée ratée, "ok" = comptée juste
 const lateMode = (d) => (d.settings.lateMode || "stay");
 const LATE_LABEL = { stay: "Temps écoulé : la carte ne montera pas", fail: "Temps écoulé : la carte comptera comme ratée", ok: "Temps écoulé" };
+// Case à cocher par élève et par série : décompte actif ou non (actif par défaut)
+const timerFor = (p, d) => ((p.timerOff || {})[d.id] ? 0 : timerSecs(d));
 function stopTimer() { const t = $("#timer"); if (t) t.classList.add("stopped"); }
 // Cases au programme de la séance n, de la plus haute à la plus basse.
 const boxesFor = (n, intervals) => intervals.map((v, i) => (n % v === 0 ? i + 1 : 0)).filter(Boolean).reverse();
@@ -646,6 +650,7 @@ function renderHome() {
         <button type="button" data-mode="flip" aria-pressed="${p.answerMode !== "mic"}">Retourner la carte</button>
         <button type="button" data-mode="mic" aria-pressed="${p.answerMode === "mic"}">Répondre au micro</button></div>
         ${p.answerMode === "mic" ? `<p class="help" style="margin:6px 0 0">La voix est transcrite par le service du navigateur (Google pour Chrome, Microsoft pour Edge, Apple pour Safari) : connexion Internet nécessaire.</p>` : ""}` : ""}
+      ${timerSecs(d) ? `<label class="check" for="tmrOn"><input type="checkbox" id="tmrOn" ${timerFor(p, d) ? "checked" : ""}> Décompte de ${timerSecs(d)} secondes</label>` : ""}
       <p class="status">${status}</p>
       ${s.available ? `<div class="counts">
         <div class="count"><b class="num">${s.toReview}</b><span>à revoir</span></div>
@@ -701,6 +706,7 @@ function renderHome() {
   $("#bkFile") && ($("#bkFile").onchange = backupLoad);
   app.querySelectorAll("[data-dir]").forEach((b) => (b.onclick = () => { p.dirs[d.id] = b.dataset.dir; save(); render(); }));
   app.querySelectorAll("[data-mode]").forEach((b) => (b.onclick = () => { p.answerMode = b.dataset.mode; save(); render(); }));
+  $("#tmrOn") && ($("#tmrOn").onchange = (e) => { p.timerOff ||= {}; if (e.target.checked) delete p.timerOff[d.id]; else p.timerOff[d.id] = true; save(); });
   $("#start") && ($("#start").onclick = () => startSession(false));
   $("#skip") && ($("#skip").onclick = () => { s.bx.s++; s.bx.day = t; save(); render(); });
   $("#practice").onclick = () => startSession(true);
@@ -783,7 +789,7 @@ function renderSession() {
   app.innerHTML = `<div class="session">
     <div class="sessbar"><button class="btn ghost" id="quit">← Arrêter</button>
       <div class="chips" aria-label="Déroulement de la séance">${sess.practice ? "" : `<span class="label">Séance ${sess.n}</span>`}${chips}</div></div>
-    ${timerSecs(d) ? `<div class="timerbox"><div class="timer${sess.flipped ? " stopped" : ""}" id="timer" style="--t:${timerSecs(d)}s" role="timer" aria-label="Décompte de ${timerSecs(d)} secondes"><i></i></div><span class="tlabel" id="tlabel" aria-live="polite"></span></div>` : ""}
+    ${timerFor(p, d) ? `<div class="timerbox"><div class="timer${sess.flipped ? " stopped" : ""}" id="timer" style="--t:${timerFor(p, d)}s" role="timer" aria-label="Décompte de ${timerFor(p, d)} secondes"><i></i></div><span class="tlabel" id="tlabel" aria-live="polite"></span></div>` : ""}
     <div class="scene" id="scene" role="button" tabindex="0" aria-label="Retourner la carte">
       <div class="card ${sess.flipped ? "flipped" : ""}" id="card">
         <div class="face front" style="--c:${c}"><div class="main${long(qText)}">${faceHTML(qText)}</div>${qHint}
